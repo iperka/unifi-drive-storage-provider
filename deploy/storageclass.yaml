@@ -1,0 +1,36 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: unifi-drive
+provisioner: drive.unifi.iperka.com
+# UNAS does not enforce quotas via this API yet; capacity is advisory.
+# reclaimPolicy: Delete removes the UNAS drive when its PVC is deleted. Switch
+# to Retain if you want the drive (and its data) to survive PVC deletion.
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+parameters:
+  # UNAS appliance the node mounts from (the controller resolves the rest).
+  server: "192.168.1.5"
+  # NFS client allowlist applied to the export — your cluster node IPs (UNAS
+  # stores one bare IP per entry). These must be the real source IPs the UNAS
+  # sees; on a NAT'd local VM (minikube/kind on Docker Desktop) the source is
+  # rewritten and NFS "secure" exports reject it, so test the mount on real
+  # nodes. UniFi's "allow all" convention is the pair 0.0.0.0,0.0.0.1.
+  allowedCIDRs: "172.16.0.10"
+  # Extra NFS mount options appended after the defaults (nfsvers=3,nolock).
+  # UNAS exports over NFSv3 only — do not switch to nfsvers=4.
+  mountOptions: "hard,timeo=600,retrans=2"
+  # NFS export base path. Default is the UniFi-documented /var/nfs/shared; the
+  # node mounts <server>:/var/nfs/shared/<DriveName>. Override only if your
+  # firmware exposes shares elsewhere.
+  exportBasePath: "/var/nfs/shared"
+  # --- UNAS root_squash permission workaround ---
+  # Mode applied to the volume root after mount (octal). 0777 opens it to any
+  # pod UID; use 02775 for setgid group-shared semantics.
+  mountPermissions: "0777"
+  # Optional: chown the volume root after mount. (NOTE: UNAS exposes no API to
+  # set the export's anon uid/gid, so the squash-owner cannot be pinned; rely on
+  # mountPermissions above plus the pod's securityContext.fsGroup.)
+  uid: "1000"
+  gid: "1000"

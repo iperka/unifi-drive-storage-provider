@@ -1,0 +1,89 @@
+name: release
+
+# - Push to main: GoReleaser snapshot build (validates the release pipeline) and
+#   an `:edge` multi-arch image pushed + cosign-signed to GHCR.
+# - Tag v*: full GoReleaser release — signed multi-arch images (dockers_v2),
+#   SBOMs, checksums, and a GitHub release.
+# - Pull request: snapshot build only (no push), as a gate.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write # create GitHub releases (tags)
+  packages: write # push images to GHCR
+  id-token: write # keyless cosign signing via OIDC
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          # Real release on tags; snapshot build (no publish) on main/PRs.
+          args: >-
+            ${{ startsWith(github.ref, 'refs/tags/')
+              && 'release --clean'
+              || 'release --snapshot --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # OSS GoReleaser snapshots don't publish, so push an edge image on main here.
+  edge-image:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push edge image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/iperka/unifi-drive-csi:edge
+            ghcr.io/iperka/unifi-drive-csi:main-${{ github.sha }}
+          build-args: |
+            VERSION=edge-${{ github.sha }}
+
+      - name: Sign edge image (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/iperka/unifi-drive-csi@${DIGEST}"

@@ -1,0 +1,15 @@
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: drive.unifi.iperka.com
+spec:
+  # The node mounts over the network; there is no attach/detach step.
+  attachRequired: false
+  # Pass pod metadata to NodePublishVolume (useful for logging/auditing).
+  podInfoOnMount: true
+  # File: let kubelet apply each pod's securityContext.fsGroup to the volume.
+  # Combined with the node-side chmod/chown, this is layer 2 of the UNAS
+  # root_squash permission workaround.
+  fsGroupPolicy: File
+  volumeLifecycleModes:
+    - Persistent

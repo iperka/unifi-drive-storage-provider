@@ -1,0 +1,15 @@
+# Dockerfile used by GoReleaser (dockers_v2). GoReleaser builds the binaries for
+# every target platform, so this only assembles the runtime image — no Go build.
+# Base MUST stay ubuntu:24.04: debian bases cannot complete an in-container
+# NFSv3 mount against UNAS (see README / the main Dockerfile).
+FROM ubuntu:24.04
+# bindfs + fuse3: opt-in forceUid/forceGid uid-remap layer. tini: PID-1 init that
+# reaps the bindfs daemon zombies left on unmount (see main Dockerfile).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nfs-common ca-certificates bindfs fuse3 tini \
+    && rm -rf /var/lib/apt/lists/*
+# dockers_v2 stages per-platform binaries under $TARGETPLATFORM/ (e.g.
+# linux/amd64/unifi-drive-csi) in the build context.
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/unifi-drive-csi /usr/local/bin/unifi-drive-csi
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/unifi-drive-csi"]

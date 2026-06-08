@@ -1,0 +1,23 @@
+# Binaries (root-anchored: must NOT match the cmd/unifi-drive-csi/ source dir)
+/bin/
+/dist/
+/unifi-drive-csi
+
+# Test / coverage
+*.out
+coverage.txt
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local secrets — never commit real credentials
+deploy/secret.yaml
+*.local.yaml
+
+# coverage
+coverage.out
+
+# goreleaser
+dist/

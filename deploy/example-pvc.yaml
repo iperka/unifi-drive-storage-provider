@@ -1,0 +1,36 @@
+# Smoke test: a PVC plus a pod that writes to it as a non-root user. If the pod
+# can create AND re-read /data/test, the UNAS root_squash permission workaround
+# is functioning.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: unifi-drive-test
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: unifi-drive
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unifi-drive-test
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 2000
+  containers:
+    - name: writer
+      image: busybox:1.36
+      command: ["sh", "-c", "echo hello > /data/test && cat /data/test && sleep 3600"]
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: unifi-drive-test

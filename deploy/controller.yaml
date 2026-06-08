@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unifi-drive-csi-controller
+  namespace: unifi-drive-csi
+spec:
+  # 2 replicas for HA. Only one is active at a time: the csi-provisioner
+  # sidecar's leader election ensures a single provisioner drives
+  # CreateVolume/DeleteVolume, so only the leader's driver mutates the
+  # appliance. This is what makes the in-process NFS-settings mutex safe — see
+  # the single-writer note in the README.
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: unifi-drive-csi-controller
+  template:
+    metadata:
+      labels:
+        app: unifi-drive-csi-controller
+    spec:
+      serviceAccountName: unifi-drive-csi-controller
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: unifi-drive-csi-controller
+                topologyKey: kubernetes.io/hostname
+      containers:
+        # CSI external-provisioner: watches PVCs and calls CreateVolume/DeleteVolume.
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v5.1.0
+          args:
+            - --csi-address=$(ADDRESS)
+            - --leader-election=true
+            - --leader-election-namespace=unifi-drive-csi
+            - --extra-create-metadata=true
+            - --v=2
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        # Liveness: probes the driver's CSI Identity.Probe over the socket and
+        # exposes /healthz for the kubelet.
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --health-port=9808
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        # Our driver in controller mode: turns CSI calls into UniFi Drive share ops.
+        - name: unifi-drive-csi
+          image: ghcr.io/iperka/unifi-drive-csi:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --mode=controller
+            - --endpoint=unix:///csi/csi.sock
+            - --v=2
+          env:
+            - name: UNIFI_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: unifi-drive-credentials
+                  key: host
+            - name: UNIFI_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: unifi-drive-credentials
+                  key: username
+            - name: UNIFI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: unifi-drive-credentials
+                  key: password
+            # TLS verification toggle, controlled via the Secret (optional key).
+            # Defaults to the driver's built-in behaviour if the key is absent.
+            # Set insecure: "false" in production once the UNAS presents a
+            # trusted certificate.
+            - name: UNIFI_INSECURE
+              valueFrom:
+                secretKeyRef:
+                  name: unifi-drive-credentials
+                  key: insecure
+                  optional: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9808
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 300m
+              memory: 128Mi
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: unifi-drive-csi-controller
+  namespace: unifi-drive-csi
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: unifi-drive-csi-controller

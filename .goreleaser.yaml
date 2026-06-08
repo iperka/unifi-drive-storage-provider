@@ -1,0 +1,102 @@
+# GoReleaser config (https://goreleaser.com). Validate with: goreleaser check
+# Releases are cut from version tags (vX.Y.Z) and push signed multi-arch images
+# to ghcr.io; see .github/workflows/release.yml.
+version: 2
+
+project_name: unifi-drive-csi
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: unifi-drive-csi
+    main: ./cmd/unifi-drive-csi
+    binary: unifi-drive-csi
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+# dockers_v2 uses `docker buildx` to build and push a single multi-arch image.
+dockers_v2:
+  - id: unifi-drive-csi
+    ids:
+      - unifi-drive-csi
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - ghcr.io/iperka/unifi-drive-csi
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    tags:
+      - "{{ .Version }}"
+      - "{{ .Major }}.{{ .Minor }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    sbom: true
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.source: "https://github.com/iperka/unifi-drive-storage-provider"
+      org.opencontainers.image.licenses: MIT
+    annotations:
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.source: "https://github.com/iperka/unifi-drive-storage-provider"
+
+# Keyless cosign signing of the pushed images, using GitHub Actions OIDC.
+docker_signs:
+  - id: cosign-keyless
+    cmd: cosign
+    artifacts: images
+    args:
+      - "sign"
+      - "${artifact}@${digest}"
+      - "--yes"
+    output: true
+
+# Sign the checksums file too (keyless).
+signs:
+  - id: cosign-checksum
+    cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    artifacts: checksum
+    args:
+      - "sign-blob"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: iperka
+    name: unifi-drive-storage-provider
+  prerelease: auto
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-edge-{{ .ShortCommit }}"

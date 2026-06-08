@@ -1,0 +1,49 @@
+# StorageClass for ownership-strict workloads (e.g. CloudNativePG / PostgreSQL)
+# on a root_squash UNAS export. PostgreSQL refuses to start unless its data
+# directory is OWNED by the running uid — a check that mountPermissions (chmod)
+# cannot satisfy, because the UNAS squashes every write to a fixed anon owner
+# and exposes no anon-mapping API. forceUid/forceGid make the node layer a
+# bindfs FUSE mount that *presents* the volume as owned by that uid/gid, which
+# satisfies the check. CNPG runs PostgreSQL as uid/gid 26, so force them to 26.
+#
+# Trade-off: bindfs is a userspace FUSE daemon (per mount) running in the node
+# plugin container; it adds overhead and goes stale if that container restarts
+# (republish recovers it). Opt-in — use only for ownership-strict workloads.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: unifi-drive-postgres
+provisioner: drive.unifi.iperka.com
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: false
+parameters:
+  server: "192.168.1.5"
+  allowedCIDRs: "172.16.0.10"
+  mountOptions: "hard,timeo=600,retrans=2"
+  exportBasePath: "/var/nfs/shared"
+  mountPermissions: "0777"
+  # Layer a bindfs uid/gid-remap so the volume appears owned by the PostgreSQL
+  # user (CNPG uses uid/gid 26). Do NOT also set uid/gid here — bindfs owns the
+  # presented ownership; the appliance squashes chown anyway.
+  forceUid: "26"
+  forceGid: "26"
+  # --- performance tuning ---
+  # nconnect opens N parallel TCP connections to the UNAS (kernel >= 5.3,
+  # NFSv3). Benchmarked +~26% pgbench write TPS / -20% commit latency under
+  # concurrency vs a single connection; no benefit for single-stream or cached
+  # reads. CAVEAT: nconnect is per-(client,server) — the FIRST mount to a given
+  # UNAS fixes the connection count for ALL its shares, so use the SAME value on
+  # every StorageClass pointing at that appliance (or none).
+  nconnect: "8"
+  # readCache keeps the kernel page cache across opens and lengthens bindfs
+  # metadata-cache timeouts. Benchmarked ~5.7x faster repeated reads and ~10x
+  # faster stat/metadata; no effect on writes. Safe only for single-writer /
+  # single-node access (a remote writer's changes may be served stale) -- fine
+  # for a single-primary CNPG cluster. Default off; uncomment to enable.
+  # readCache: "true"
+  # For extra read/metadata caching at the NFS layer, append nocto and
+  # actimeo=<seconds> to mountOptions above (single-writer only), e.g.
+  #   mountOptions: "hard,timeo=600,retrans=2,nocto,actimeo=60"
+  #
+  # NOTE: noatime is applied by default to every volume (no atime write-backs).
